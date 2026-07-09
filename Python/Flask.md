@@ -4,5 +4,6 @@
 2. Python 项目尽可能使用类型标注进行生成代码
 3. Python 项目生成代码时，不要生成过多没有使用的 `import`，生成完之后检查一下
 4. Python 项目生成代码时，所有的 `import`统一在代码的最前面导入，不要在逻辑中进行导入，除非是为了解决循环依赖或者明确要求在逻辑中导入，并且如果有多个 `import`，按照标准库、第三方库、项目内的库的顺序进行导入，并且每个部分之间空一行分隔开来
-5. Flask 等项目采用三层架构，`controller`写接口函数，`service`实现逻辑，`mapper`实现数据库 ORM 操作，`entity`或者 `model`额外实现
-6. Flask 项目一般使用 SQLAlchemy 作为 ORM 框架进行数据库操作，如果当前项目有 ORM 框架遵循当前项目的 ORM 框架
+5. Python 项目独立异步 IO 用 `asyncio.gather` 并行执行，循环内并行将每次迭代封装为内部 async 函数后 gather
+6. Flask 等项目采用三层架构，`controller`写接口函数，`service`实现逻辑，`mapper`实现数据库 ORM 操作，`entity`或者 `model`额外实现
+7. Flask 项目一般使用 SQLAlchemy 作为 ORM 框架进行数据库操作，如果当前项目有 ORM 框架遵循当前项目的 ORM 框架

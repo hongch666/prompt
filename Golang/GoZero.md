@@ -6,3 +6,4 @@
 4. GoZero 的项目要求 logic 中不要有 SQL 代码,相关 SQL 的功能在 `model`封装暴露方法使用
 5. GoZero 项目使用日志记录的工具为对应的 logx,logx 没有 `Warn`和 `Warnf`函数,一般使用 `Error`和 `Errorf`工具
 6. GoZero 项目记录日志时,尽可能使用带上下文的Logger实例来记录,如果没有才使用logx的全局日志方法
+7. GoZero项目在并行业务上使用 `mr.Finish` 并行执行独立任务，每个任务为 `func() error`，结果写入闭包局部变量，内部吞错返回 nil
