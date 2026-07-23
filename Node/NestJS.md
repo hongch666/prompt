@@ -5,4 +5,4 @@
 3. Node.js 项目独立异步调用用 `Promise.all` 并行化，条件不满足时用 `Promise.resolve(空值)` 占位保证数组一致性
 4. TypeScript 项目尽可能使用 TypeScript 的类型，即使编译通过也尽可能加上
 5. NestJS 项目使用官方默认的代码组织形式
-6. NestJS 的项目，`common `一般放通用的非 `module`方法，`modules`一般放 module 的功能模块(无 controller)，接口相关的放在 `api`下
+6. NestJS 项目按以下分层组织代码：`config/` 放 YAML 配置和`index.ts`加载器；`common/` 放全局共享的常量、异常、工具类（非 module）；`framework/` 放全局横切关注点（decorator、guard、interceptor、filter、middleware等）；`module/common/` 放公共服务模块；`module/system/` 放系统业务模块
