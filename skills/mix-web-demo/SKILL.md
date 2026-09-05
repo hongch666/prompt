@@ -15,14 +15,47 @@ description: mix-web-demo 多语言微服务仓库专属编码规范，覆盖 Sp
 | `gozero/`  | go-zero 1.9 + goctl + sqlx                               | 8082 |
 | `nestjs/`  | NestJS + Fastify + Mongoose/TypeORM + opossum            | 8083 |
 | `fastapi/` | FastAPI + SQLAlchemy async + contextvars + APScheduler   | 8084 |
-| `gateway/` | Spring Cloud Gateway（纯路由，少量修改）                 | -    |
+| `gateway/` | Apache APISIX（配置驱动，无业务代码）                    | 8080 |
 
 配套通用 skills（本 skill 未覆盖的细节查阅它们，冲突时以本 skill 为准）：
 
+**Spring / Java**
+
 - `springboot-patterns`、`spring-boot-engineer`：Spring WebFlux 响应式模式
-- `nestjs-patterns`：NestJS 模块与 DI 模式
-- `fastapi-patterns`：FastAPI 依赖注入与异步模式
+- `java-spring-boot`、`java-springboot`：Spring Boot 模块划分与最佳实践
+
+**NestJS / Node.js**
+
+- `nestjs-patterns`、`nestjs-best-practices`、`nestjs-expert`：NestJS 模块、DI 与架构模式
+- `nodejs-backend-typescript`：Node.js + TypeScript 后端通用约定
+
+**FastAPI / Python**
+
+- `fastapi-patterns`、`fastapi-expert`、`fastapi-python`：FastAPI 依赖注入与异步模式
+- `python-backend`：Python 后端安全与代码质量
+- `sqlalchemy-postgres`：SQLAlchemy 2.0 + Pydantic + PostgreSQL（FastAPI 侧的 ORM 与 pgvector 访问）
+
+**Go / GoZero**
+
 - `golang-design-patterns`、`golang-pro`：Go 组合根与并发模式
+- `golang-code-style`：Go 代码风格与可读性约定
+- `golang-database`：Go 数据库访问（sqlx 参数化查询、事务、连接池）
+- `golang-error-handling`：Go 错误创建、包装与结构化日志
+- `golang-testing`：Go 表驱动测试与 testify
+- `golang-security`：Go 安全实践（注入防护、密钥管理、日志安全）
+
+**数据库**
+
+- `database-schema-design`、`database-migration`：Schema 设计与迁移（MySQL / PostgreSQL / MongoDB）
+
+**AI / LLM**
+
+- `langchain`、`llm-application-dev-langchain-agent`：LangChain Agent、工具调用与多模型编排
+- `rag`：RAG 检索增强（pgvector 向量库与语义检索）
+
+**工程化**
+
+- `devops`：Docker / Docker Compose 部署与 CI/CD
 
 ## 通用规则（全部服务）
 
@@ -35,6 +68,11 @@ description: mix-web-demo 多语言微服务仓库专属编码规范，覆盖 Sp
    - FastAPI：`core/constants/`（`Messages`、`HttpCode`、`RedisKeys`、`Scripts`、`WarehouseScripts`）
    - GoZero：`app/common/constants/`（`messages.go`、`defaults.go`）
    - 语言支持字符串模板时（Python f-string、TS 模板串、Go fmt），动态部分用模板拼接常量，不把整句抽离
+   - 注解 / 装饰器的字符串参数**不抽常量**，直接写字面量：这类字符串只在声明处使用一次，抽到常量类后需跳转查看，反而降低可读性
+     - Spring：`@Operation(summary, description)`、`@Tag`
+     - NestJS：`@ApiOperation({ summary, description })`、`@ApiTags`
+     - FastAPI：`@router.get/post(..., summary=, description=)`
+     - GoZero 无注解机制，不适用本条
 5. 相互独立的 IO 调用（RPC/HTTP/DB/Redis/ES/MQ）必须并行化，禁止串行等待；各服务并行原语见对应章节
 6. 日志遵循各服务现有封装（见各服务章节），禁止绕过封装直接 print/console/logx 散用
 7. 远程调用统一走各服务封装的客户端，自动透传用户上下文头：`X-User-Id`、`X-Username`、`X-Session-Id`、`Authorization`、`X-Internal-Token`；无登录用户时内部令牌 `userId=-1` 表示系统调用。禁止在新代码里裸用 httpx/axios/http.Client 直连其他服务
@@ -94,6 +132,9 @@ module/system/    系统业务模块（apiLog、articleLog、sqlTools 等）
 - 请求上下文用 nestjs-cls：`ClsMiddleware` 写入（userId/username/sessionId/token/internalToken），业务注入 `ClsService` 读取；gRPC 或脱离 HTTP 异步链的场景必须用 `ClsService.run` 手动开启上下文
 - 远程调用统一走 `module/common/nacos/nacos.service.ts` 的 `call(opts: CallOptions)`（Nacos 发现 + opossum 熔断 + 自动上下文头/内部令牌），按目标服务在调用方封装 Client 类
 - 独立异步调用用 `Promise.all` 并行；条件不满足时用 `Promise.resolve(空值)` 占位保证数组结构一致
+- 并行调用中存在「部分失败可容忍」时用 `Promise.allSettled`，逐项判断 `status` 决定降级或抛出，避免单个失败拖垮整体；不要用 `Promise.all` + `catch` 吞异常来模拟降级，会丢失失败项与输入项的对应关系
+  - 批量任务逐项降级（参考 `module/system/sqlTools/sqlTools.service.ts` 并行查多表行数）：`results.map((r, i) => r.status === "fulfilled" ? r.value : 降级值)`，用索引 `i` 关联回输入项
+  - 多个独立调用中区分必选与可选（参考 `module/common/github/github.service.ts` 并行拉 profile 与 email）：解构后分别判断，必选项 `rejected` 直接 `throw reason`，可选项 `fulfilled` 才取值、否则走兜底
 - 尽可能使用 TypeScript 类型标注（接口、泛型、联合类型），即使编译通过也补全类型
 - 遵循项目 `eslint.config.mjs`，提交前通过 lint
 - Swagger 用 `@nestjs/swagger`：`@ApiOperation({ summary, description })`、`@ApiTags`，注解参数直接写字面量，不抽常量
