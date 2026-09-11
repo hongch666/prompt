@@ -40,6 +40,7 @@ description: mix-web-demo 多语言微服务仓库专属编码规范，覆盖 Sp
 7. 远程调用统一走各服务封装的客户端，自动透传用户上下文头：`X-User-Id`、`X-Username`、`X-Session-Id`、`Authorization`、`X-Internal-Token`；无登录用户时内部令牌 `userId=-1` 表示系统调用。禁止在新代码里裸用 httpx/axios/http.Client 直连其他服务
 8. 服务发现基于 Nacos；新服务接入需注册实例并在 metadata 声明能力
 9. 生成代码时参考目标服务同类文件的命名与组织方式；已有成熟风格优先
+10. 注释说明：注释的结束不能包含中文句号，直接留空，如果注释过长，使用多行注释形式，而不是多条单行注释，短注释使用1行的单行注释即可
 
 ## Spring 服务（spring/，WebFlux 响应式栈）
 
