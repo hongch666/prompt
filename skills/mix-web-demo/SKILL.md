@@ -1,6 +1,6 @@
 ---
 name: mix-web-demo
-description: mix-web-demo 多语言微服务仓库专属编码规范，覆盖 Spring WebFlux、NestJS、FastAPI、GoZero 四个服务与 APISIX 网关的分层组织、依赖注入、请求校验、实时链路、日志、常量、并行化、SQL 参数化、远程调用与 Swagger 生成约定，并含仓库工程约束（CRLF 行尾、goctl 生成流程）。在本仓库生成或修改任何服务代码时必须使用；与通用 skills 冲突时以本 skill 的项目实证约定为准。
+description: mix-web-demo 多语言微服务仓库专属编码规范，覆盖 Spring WebFlux、NestJS、FastAPI、GoZero 四个服务与 APISIX 网关的分层组织、依赖注入、请求校验、实时链路、日志、测试、常量、并行化、SQL 参数化、远程调用与 Swagger 生成约定，并含仓库工程约束（CRLF 行尾、goctl 生成流程）。在本仓库生成或修改任何服务代码时必须使用；与通用 skills 冲突时以本 skill 的项目实证约定为准。
 ---
 
 # mix-web-demo 项目专属编码规范
@@ -57,6 +57,11 @@ description: mix-web-demo 多语言微服务仓库专属编码规范，覆盖 Sp
 
 - `devops`：Docker / Docker Compose 部署与 CI/CD
 
+## 按任务加载参考规范
+
+- 创建、修改、删除或评审测试，以及修复需要回归测试的缺陷时，必须完整读取 [references/unit-testing.md](references/unit-testing.md)
+- 测试规范只约束测试边界与质量，不要求为了覆盖率测试生成代码、DTO、getter 或第三方库内部行为
+
 ## 通用规则（全部服务）
 
 1. 使用中文回复；代码注释与字符串信息使用中文；注释与说明不含任何 emoji 与标志
@@ -79,6 +84,7 @@ description: mix-web-demo 多语言微服务仓库专属编码规范，覆盖 Sp
 8. 服务发现基于 Nacos；新服务接入需注册实例并在 metadata 声明能力
 9. 生成代码时参考目标服务同类文件的命名与组织方式；已有成熟风格优先
 10. 注释说明：注释的结束不能包含中文句号，直接留空，如果注释过长，使用多行注释形式，而不是多条单行注释，短注释使用1行的单行注释即可
+11. **日志采集必须排除敏感字段**：请求体进入日志后会被投递到 `api-log-queue`，最终落在 MongoDB `apilogs` 与 ClickHouse `ods_api_log`，因此凡是携带密码、验证码、令牌、授权码的接口都要显式排除。各服务能力：Spring `@ApiLog(excludeFields = {...})`、NestJS `@ApiLog({ excludeFields: [...] })`、FastAPI `@logWithConfig(exclude_fields = [...])`（`@log` 不支持）；**GoZero 的 `ApplyApiLog` 没有任何排除能力**，涉及凭据的接口不要挂它，或先给中间件补过滤参数
 
 ## Spring 服务（spring/，WebFlux 响应式栈）
 
@@ -90,6 +96,7 @@ api/service      业务接口
 api/service/impl 业务实现
 api/repository   R2DBC Repository
 entity/po|vo|dto|projection  实体与视图对象
+entity/assembler 实体到 VO 的装配器（依赖 api/repository，供 service/impl 复用，跨包调用需 public）
 infra/client     远程调用客户端（ServiceWebClient）
 infra/filter     WebFilter（UserContextWebFilter）
 infra/handler    全局异常处理（GlobalExceptionHandler）
@@ -99,6 +106,7 @@ common/constants|utils  常量与工具（RedisUtil、JwtUtil、UserContext）
 
 ### 硬性约定
 
+- **依赖方向**：`api` 是最上层，`infra` / `core` / `common` / `entity` 都不依赖它；目前唯一例外是 `entity/assembler`（装配器需要 `api/repository` 才能加载关联数据）。新增跨层组件前先确认会不会引入新的反向依赖
 - ORM 是 Spring Data R2DBC，不是 MyBatisPlus：Repository 继承 `ReactiveCrudRepository<T, ID>`；自定义 SQL 用 `@Query` + `:param`，更新加 `@Modifying`；事务用 `TransactionalOperator.transactional()` 包裹，禁止 `@Transactional`
 - Controller 返回 `Mono<Result<T>>` / `Flux<Result<T>>`，Service 返回 `Mono<T>` / `Flux<T>`；禁止返回裸类型、禁止调用 `.block()`
 - 请求上下文走 Reactor Context：`UserContextWebFilter` 用 `.contextWrite()` 写入，业务用 `Mono.deferContextual(ctx -> ...)` 读取 `UserContext.getUserId(ctx)`；禁止 `ThreadLocal`、`RequestContextHolder`、`OncePerRequestFilter`、`HandlerInterceptor`
@@ -110,7 +118,8 @@ common/constants|utils  常量与工具（RedisUtil、JwtUtil、UserContext）
 - 微服务调用用 `ServiceWebClient`（WebClient + LoadBalancer + Resilience4j 熔断/重试），新增远程接口在该类中加方法，通过 `deferContextual` 注入上下文头；禁止 OpenFeign
 - Redis 用 `ReactiveStringRedisTemplate`，封装在 `common/utils/RedisUtil`；缓存读写走 Mono 链式 `switchIfEmpty(Mono.defer(...))` 模式，禁止 `@Cacheable`
 - AOP 切面中 `pjp.proceed()` 返回 `Mono<?>` 时必须在 Mono 链内操作（`.flatMap()` / `.doOnSuccess()`），上下文用 `.deferContextual()` 获取
-- 横切能力由 AOP 实现：`ApiLogAspect`（接口日志）、`RequirePermissionAspect`（声明式权限注解）、`ArticleSyncAspect`（文章变更同步 ES / 向量 / 数仓）、`Neo4jSyncAspect`（图谱同步）。新增写接口时确认是否需要权限注解与同步触发，同步失败只记日志、没有补偿机制
+- 横切能力由 AOP 实现：`ApiLogAspect`（接口日志）、`PermissionValidationAspect`（`@RequirePermission` 声明式权限）、`InternalTokenAspect`（`@RequireInternalToken` 内部令牌）、`ArticleSyncAspect`（文章变更同步 MQ / ES / 向量）、`Neo4jSyncAspect`（图谱同步）。新增写接口时确认是否需要权限注解与同步触发，同步失败只记日志、没有补偿机制
+- **响应式切面的固定写法**：`pjp.proceed()` 返回的是**未订阅的冷流**（业务代码此时尚未执行），且 Reactor Context 只在订阅时可见。所以切面必须把校验 / 日志 / 同步挂到 Mono 链上（`Mono.deferContextual(ctx -> ...)`）：校验类用 `validate(ctx).then(businessMono)` 保证「校验先于业务」，副作用类用 `monoResult.doOnSuccess(...)` 发后即忘；副作用里若需要用户身份，必须用 `UserContext.writeContext(Context.empty(), ...)` 重建 Context 再 `contextWrite`，否则异步链上读不到。**禁止用同步代码在 `proceed()` 之前读上下文**，那时 ctx 不可见，只会拿到 null
 - 注入风格：`@Service` + `@RequiredArgsConstructor` + `private final` 字段（构造器注入），禁止字段 `@Autowired`
 - Swagger 用 springdoc：`@Operation(summary, description)`、`@Tag`，注解参数直接写字面量，不抽常量
 - 日志：`common/utils/SimpleLogger` 实例注入使用
@@ -216,11 +225,12 @@ app/internal/svc         ServiceContext 组合根（分域上下文 + dependency
 app/internal/client      按服务封装的远程客户端（fastapiClient、nestjsClient、springClient）
 app/internal/types       请求响应类型（goctl 生成的 types.go + 手写 <domain>Validate.go）
 app/internal/hub         实时通信（chatHub、sseHub、chatRealtimeDispatcher、realtimeTypes）
+app/internal/task        定时任务（cron 调度器 + logic/esSyncerTask）
 app/common/constants     常量（messages.go、defaults.go、validations.go、httpCode.go、sqlTools.go、scripts.go、redisKeys.go）
 app/common/keys          context key（未导出类型）
 app/common/client        ServiceDiscovery 统一远程调用
 app/common/exceptions    业务异常类型（BadRequest / InternalServerError 等）
-app/common/realtime      Redis Pub/Sub 跨实例广播（redisPubSub.go）
+app/common/pubsub        Redis Pub/Sub 跨实例广播（redisPubSub.go）
 app/common/utils         ZeroLogger 与工具（response、redisLock、internalToken、safeGo）
 app/model/<table>        数据模型（goctl 生成 _gen.go + custom 扩展文件）
 ```
@@ -228,6 +238,8 @@ app/model/<table>        数据模型（goctl 生成 _gen.go + custom 扩展文�
 - **分层方向单向**：`internal/*` 可依赖 `common/*`，`common/*` **不得**依赖 `internal/*`。实时帧类型定义在 `.api` → `internal/types`，hub 因此放在 `internal/hub`；若放 `common/hub` 就会产生反向依赖
 - logic 中禁止 SQL：数据访问全部封装在 `app/model/`，logic 通过 `l.svcCtx.XxxModel.Method(l.ctx, ...)` 调用；model 方法第一个参数是 `ctx`
 - svc 分域：`ServiceContext` 匿名嵌入 `RuntimeContext`、`InfrastructureContext`、`ModelContext`、`HubContext`、`ClientContext`、`LoggerContext`、`MiddlewareContext`；新增依赖加入对应分域，在 `serviceComponentsContext.go` 组装，禁止往 ServiceContext 平铺字段
+- **定时任务调度器挂在 `RuntimeContext.TaskScheduler`**（2026-09-16 从包级变量收口）：`internal/task` 只提供 `NewTaskScheduler(svcCtx) *cron.Cron` 负责构造并启动，返回值由 `boot/server.go` 赋给 `ctx.TaskScheduler`；停止统一由 `ServiceContext.Close()` 承担（先 `TaskScheduler.Stop()` 再 `Cancel()`），`boot/init.go` 的关闭入口调 `ctx.Close()` 而非直接操作调度器。**不要再引入包级调度器变量**（测试无法替换、生命周期不受 Close 管理）。cron 表达式用标准 5 字段（分 时 日 月 周），"每小时"是 `0 * * * *`，写成 `* * */1 * *` 会变成每分钟执行
+- `ServiceContext.Close()` 是唯一的关闭入口（此前长期无人调用，2026-09-16 起由 `boot` 调用）；新增需要释放的资源时把释放逻辑加进 `Close()`，不要另建包级 stop 函数
 - 日志：logic 结构体嵌入 `*utils.ZeroLogger`（构造时 `ZeroLogger: svcCtx.Logger.WithContext(ctx)`），调用 `l.Info/l.Errorf/l.Error`；logx 全局方法仅限启动阶段（logx 无 Warn/Warnf）；项目 ZeroLogger 提供 `Warningf`，警告级日志用它，异常一律 `l.Errorf`
 - 并行：`mr.Finish`，每个任务为 `func() error`，结果写入闭包局部变量，任务内部吞错返回 nil（错误在任务外统一处理）
 - context：一切可能阻塞的函数第一个参数接收 `context.Context`，嵌套调用透传同一 ctx；logic 用 `l.ctx`
@@ -248,7 +260,8 @@ app/model/<table>        数据模型（goctl 生成 _gen.go + custom 扩展文�
 
 - **帧结构的单一来源是 `.api`**：`ChatSSEMessage`、`ChatWsMessage` 声明在 `api/chat/stream.api`，接口的 `returns` 直接指向它们，**不要**再建空的 `XxxConnectResp` 占位类型。goctl 生成类型用 `Id / UserId / SenderId / ReceiverId / MessageId` 命名，与手写结构旧的 `ID / UserID / ...` 不同，跨用时需改字段名并把 `uint` 改 `uint64`
 - hub 与实时分发在 `internal/hub`（`chatHub`、`sseHub`、`chatRealtimeDispatcher`、`realtimeTypes`）：本机连接管理 + 跨 Pod 事件分发。内部信封 `ChatRealtimeEvent` 只在对内使用，**不进 `.api`**
-- **不要采用 `sse_handler.tpl` 的「每请求 chan + handler 内 flush 循环」单机模式**：跨实例广播依赖 `internal/hub` + `common/realtime/redisPubSub.go` 的 Redis Pub/Sub，照模板改会丢掉多副本下的消息投递。连接接管（`HandleConnection` / `upgrader.Upgrade`）必须留在 handler，且接管前不得写 `w`
+- **不要采用 `sse_handler.tpl` 的「每请求 chan + handler 内 flush 循环」单机模式**：跨实例广播依赖 `internal/hub` + `common/pubsub/redisPubSub.go` 的 Redis Pub/Sub，照模板改会丢掉多副本下的消息投递。连接接管（`HandleConnection` / `upgrader.Upgrade`）必须留在 handler，且接管前不得写 `w`
+- **`common/pubsub.RedisPubSub` 是「一个实例一个频道」**（2026-09-16 由 `common/realtime` 迁移并参数化）：频道在 `NewRedisPubSub(client, logger, channel)` 构造时绑定，`Publish` / `Start` 都不收频道参数。内部只持有单个 `*redis.PubSub` 引用，所以**同一个实例不能订阅第二个频道**（会覆盖前一个订阅的引用、造成连接泄漏与丢消息）。需要新频道就新建实例，频道常量统一放 `common/constants/redisKeys.go`
 - 心跳与初始帧属协议内容：SSE 连接建立时下发 `{"type":"connected"}`，WS 收到 `{"type":"ping"}` 回 `{"type":"pong"}`
 
 ### 搜索链路
@@ -277,10 +290,11 @@ app/model/<table>        数据模型（goctl 生成 _gen.go + custom 扩展文�
 - 以 YAML 数据面运行（`role_data_plane` + `config_provider: yaml`），无业务代码；路由与插件全部在 `apisix/apisix.yaml`
 - **认证外置**：业务路由挂 `forward-auth` 回调 Spring 的 `/users/internal/auth/validate`，由网关注入 `X-User-Id` / `X-Username` / `X-Session-Id` 供下游透传；**下游服务只信任请求头**，不自行解析 JWT
 - 内部接口防护靠 `block-internal` 路由（URI 黑名单），新增内部接口必须同步加入黑名单
+- **`block-internal` 的 `uri` 是精确匹配**（只有以 `*` 结尾才是前缀匹配），而它要挡的接口往往落在宽松前缀路由（`/articles/*`、`/users/*`、`/email/*`、`/ai_history/*`）覆盖范围内。新增内部接口时除了加黑名单，还要确认黑名单条目能覆盖实际访问路径，否则会出现「精确路径被挡、子路径可直达」的缺口
 - 长连接用独立 upstream（读超时 3600s），与普通接口区分
 - 新增对外路由：按既有分组挂 `forward-auth` 与 `limit-req`（登录类用 `*login_limit`）；public 路由必须有明确理由且不能漏挂限流
 - 改配置后用 YAML 解析器校验语法，并确认目标路由的插件确实挂载
-- **部署注意**：docker-compose 目前把各服务端口直映射宿主机，而下游无条件信任 `X-User-Id`，生产必须收敛端口暴露（仅网关可达），否则可伪造身份直达服务
+- **端口暴露（2026-09-16 按仓库实证核对）**：根 `docker-compose.yml` 里只有 gateway 映射宿主机（8080 → 容器 9080），spring / gozero / nestjs / fastapi **均不映射宿主机端口**，容器间经 `hcsy` 网络 + Nacos 直连。下游无条件信任 `X-User-Id`，所以这个收敛状态正是身份不可伪造的前提，改动编排时不要给业务服务加回 `ports`；本地开发模式（`./mix seq`）直连服务端口，没有这层保护
 
 ## 仓库工程约束
 
@@ -290,6 +304,11 @@ app/model/<table>        数据模型（goctl 生成 _gen.go + custom 扩展文�
 - git 用于精确核对与回退：`git status --porcelain`、`git diff --ignore-cr-at-eol`（判断是否仅行尾差异）、`git checkout -- <文件>`
 - 本机环境参考：Go / gofmt 在 `C:\Program Files\Go\bin\`，goctl 在 `C:\Users\30708\go\bin\goctl.EXE`，git 在 `C:\Program Files\Git\cmd\git.EXE`（`usr\bin\` 下有 grep / tr / sed / basename 等，用完整路径调用），maven 在 `C:\apache-maven-3.9.11\bin\mvn.CMD`，javap 在 `C:\Program Files\Java\jdk-17\bin\javap.exe`
 - bash 环境的 `dirname` / `head` 等不稳定（PATH 时有时无），批量格式与行尾校验优先用 Python `subprocess` 调绝对路径
+
+- `mix` 脚本顶层子命令只有 `setup`、`swag`、`goctl-api`、`goctl-orm`、`dev`、`dist`、`docker`、`docker-services`、`loki`、`compose`、`help`；开发模式必须写全 `./mix dev multi|seq|stop`（**没有** `./mix seq` / `./mix multi` / `./mix stop`，README 历史版本里这三处写错）
+- `scripts/run.sh` 的运行工具默认值：`--java-build` 默认 `maven`、`--node-runtime` 默认 `bun`、`--python-runtime` 默认 `uv`
+- 两套容器编排的容器名不同：`./mix docker` 用 `mix-<service>-container`，`./mix compose` 用 `mix-<service>`（compose 的 `container_name`）
+- `README.md` 同样是 CRLF，批量改文档要按「归一化 LF → 断言唯一性后替换 → 还原 CRLF」处理，不要逐处手工编辑
 
 ## 验证命令
 
