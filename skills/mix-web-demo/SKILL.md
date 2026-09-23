@@ -67,7 +67,8 @@ description: mix-web-demo 多语言微服务仓库专属编码规范，覆盖 Sp
 1. 使用中文回复；代码注释与字符串信息使用中文；注释与说明不含任何 emoji 与标志
 2. 不主动生成任何文档，除非明确要求
 3. SQL 一律参数化，禁止字符串拼接用户值。各服务占位风格：Spring R2DBC 用 `:param`；FastAPI ClickHouse 用 `%(name)s`；GoZero sqlx 用 `?`；NestJS 走 ORM 方法 API
-4. 常量抽取：四个服务均有常量类，消息类字符串必须进常量类引用
+4. **每次生成或修改代码后必须执行代码格式化与格式检查**：先跑 `./mix format <service>` 自动格式化，再跑 `./mix lint <service>` 确认检查通过，不允许把未格式化的代码交付；省略服务名时处理 spring、gozero、nestjs、fastapi 全部，`gateway` 为配置驱动不参与
+5. 常量抽取：四个服务均有常量类，消息类字符串必须进常量类引用
    - Spring：`common/constants/Messages.java`、`HttpCode.java`
    - NestJS：`common/constants/`（`Messages`、`HttpCode`、`Defaults`、`ErrorIds`）
    - FastAPI：`core/constants/`（`Messages`、`HttpCode`、`RedisKeys`、`Scripts`、`WarehouseScripts`）
@@ -78,23 +79,23 @@ description: mix-web-demo 多语言微服务仓库专属编码规范，覆盖 Sp
      - NestJS：`@ApiOperation({ summary, description })`、`@ApiTags`
      - FastAPI：`@router.get/post(..., summary=, description=)`
      - GoZero 无注解机制，不适用本条
-5. 相互独立的 IO 调用（RPC/HTTP/DB/Redis/ES/MQ）必须并行化，禁止串行等待；各服务并行原语见对应章节
-6. 日志遵循各服务现有封装（见各服务章节），禁止绕过封装直接 print/console/logx 散用
-7. 远程调用统一走各服务封装的客户端，自动透传用户上下文头：`X-User-Id`、`X-Username`、`X-Session-Id`、`Authorization`、`X-Internal-Token`；无登录用户时内部令牌 `userId=-1` 表示系统调用。禁止在新代码里裸用 httpx/axios/WebClient/http.Client 直连其他服务。各服务的唯一入口与底层 HTTP 客户端：
+6. 相互独立的 IO 调用（RPC/HTTP/DB/Redis/ES/MQ）必须并行化，禁止串行等待；各服务并行原语见对应章节
+7. 日志遵循各服务现有封装（见各服务章节），禁止绕过封装直接 print/console/logx 散用
+8. 远程调用统一走各服务封装的客户端，自动透传用户上下文头：`X-User-Id`、`X-Username`、`X-Session-Id`、`Authorization`、`X-Internal-Token`；无登录用户时内部令牌 `userId=-1` 表示系统调用。禁止在新代码里裸用 httpx/axios/WebClient/http.Client 直连其他服务。各服务的唯一入口与底层 HTTP 客户端：
    - Spring：`infra/client/ServiceWebClient`（**WebClient** + `@LoadBalanced` 按服务名寻址 + Resilience4j 熔断/重试），按目标服务加方法
    - GoZero：`app/common/client` 的 `ServiceDiscovery.CallService`（**go-zero `rest/httpc`** + Nacos 轮询 + 退避重试），按目标服务在 `internal/client/` 封装
    - NestJS：`module/common/nacos/nacos.service.ts` 的 `call(opts)`（**axios** + axios-retry + opossum），按目标服务在调用方封装 Client 类
    - FastAPI：`app/core/client/client.py` 的 `call_remote_service`（**httpx** 共享连接池 + SimpleCircuitBreaker + tenacity），按服务在 `internal/clients/` 封装
-8. **HTTP 连接池必须随服务生命周期释放**，不能指望进程退出收尾。现状与要求：
+9. **HTTP 连接池必须随服务生命周期释放**，不能指望进程退出收尾。现状与要求：
    - FastAPI 已规范：两个 `httpx.AsyncClient`（内网 `trust_env=False` 与外部抓取各一个）由 `lifespan` 创建、`yield` 之后 `aclose()`，**新增长连接客户端必须走同一处创建与释放**
    - Spring 由容器管理 reactor-netty 全局连接池，无需手工关闭；但禁止在请求路径上反复 `WebClient.builder().build()`，应注入 `WebClient.Builder` 并缓存实例
    - GoZero 已收口为单条链路：`ServiceDiscovery.Close()` → 三个业务 Client 的 `Close()` → `ClientContext.Close()` → `ServiceContext.Close()`，新增客户端必须接进来
    - NestJS 已收口：`NacosService` 实现 `OnModuleDestroy`，注销 Nacos 实例 + `shutdown()` 熔断器 + `destroy()` 专用 agent；新增持有的连接资源挂同一处，不要另建包级 stop 函数
-9. 服务发现基于 Nacos；新服务接入需注册实例并在 metadata 声明能力
-10. 生成代码时参考目标服务同类文件的命名与组织方式；已有成熟风格优先
-11. 注释说明：注释的结束不能包含中文句号，直接留空，如果注释过长，使用多行注释形式，而不是多条单行注释，短注释使用1行的单行注释即可
-12. **日志采集必须排除敏感字段**：请求体进入日志后会被投递到 `api-log-queue`，最终落在 MongoDB `apilogs` 与 ClickHouse `ods_api_log`，因此凡是携带密码、验证码、令牌、授权码的接口都要显式排除。各服务能力：Spring `@ApiLog(excludeFields = {...})`、NestJS `@ApiLog({ excludeFields: [...] })`、FastAPI `@logWithConfig(exclude_fields = [...])`（`@log` 不支持）；**GoZero 的 `ApplyApiLog` 没有任何排除能力**，涉及凭据的接口不要挂它，或先给中间件补过滤参数
-13. **新增接口必须带参数校验**，任何接收请求参数的接口都要声明校验规则，不得只靠业务层兜底。各服务写法见对应章节；**GoZero 的校验标签写在 `.api` 文件里**（随 goctl 生成进 `types.go`），漏写标签等于该参数没有校验，不会报错也不会告警
+10. 服务发现基于 Nacos；新服务接入需注册实例并在 metadata 声明能力
+11. 生成代码时参考目标服务同类文件的命名与组织方式；已有成熟风格优先
+12. 注释说明：注释的结束不能包含中文句号，直接留空，如果注释过长，使用多行注释形式，而不是多条单行注释，短注释使用1行的单行注释即可
+13. **日志采集必须排除敏感字段**：请求体进入日志后会被投递到 `api-log-queue`，最终落在 MongoDB `apilogs` 与 ClickHouse `ods_api_log`，因此凡是携带密码、验证码、令牌、授权码的接口都要显式排除。各服务能力：Spring `@ApiLog(excludeFields = {...})`、NestJS `@ApiLog({ excludeFields: [...] })`、FastAPI `@logWithConfig(exclude_fields = [...])`（`@log` 不支持）；**GoZero 的 `ApplyApiLog` 没有任何排除能力**，涉及凭据的接口不要挂它，或先给中间件补过滤参数
+14. **新增接口必须带参数校验**，任何接收请求参数的接口都要声明校验规则，不得只靠业务层兜底。各服务写法见对应章节；**GoZero 的校验标签写在 `.api` 文件里**（随 goctl 生成进 `types.go`），漏写标签等于该参数没有校验，不会报错也不会告警
 
 ## Spring 服务（spring/，WebFlux 响应式栈）
 
@@ -264,16 +265,15 @@ app/model/<table>        数据模型（goctl 生成 _gen.go + custom 扩展文�
 
 - **机制：go-playground/validator 标签式校验**。标签写在 `.api` 字段上，随 goctl 生成进 `internal/types/types.go`；**不再有手写的 `<domain>Validate.go`**，新增请求类型不需要补任何 Go 代码
 - 生效链路：`boot.CreateServer` 调 `validation.InitValidator()` → `httpx.SetValidator` 注册 → `httpx.Parse` 在解析完 path/form/header/json 后触发校验。**请求类型绝不能实现 `Validate() error`**：`httpx.Parse` 是 `if 实现接口 { ... } else if 注册的校验器 != nil { ... }`，一旦实现了方法就会走前一个分支，让 `SetValidator` 静默失效（本项目早期踩过这个坑并回退过一次）
-- 自定义标签（实现在 `common/validation/validator.go`）：
-  | 标签 | 语义 |
-  | --- | --- |
-  | `gt=0` / `required` 等 | validator 内置规则，直接用 |
-  | `notblank` | 去首尾空白后非空；`required` 拦不住纯空白字符串 |
-  | `positiveint` | 字符串形式的正整数，用于 path 变量；`gt=0` 作用在 string 上比的是长度 |
-  | `datetime` | 符合 `constants.DateTimeFormat` |
-  | `searchmode` | `keyword` / `hybrid` / `graph`，大小写与首尾空白不敏感 |
-  | `maxrunes=N` | 按字符数限制长度；不用内置 `max`，避免中文被按字节误判 |
-  | `notbefore=StartDate` | 不早于同级指定时间字段；**跨字段校验必须用带参标签**，不要注册 struct-level validation（那需要 `common` 包导入 `internal/types`，会造成反向依赖） |
+- | 自定义标签（实现在 `common/validation/validator.go`）： | 标签                                                                                                                                              | 语义 |
+  | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ---- |
+  | `gt=0` / `required` 等                                  | validator 内置规则，直接用                                                                                                                        |
+  | `notblank`                                              | 去首尾空白后非空；`required` 拦不住纯空白字符串                                                                                                   |
+  | `positiveint`                                           | 字符串形式的正整数，用于 path 变量；`gt=0` 作用在 string 上比的是长度                                                                             |
+  | `datetime`                                              | 符合`constants.DateTimeFormat`                                                                                                                    |
+  | `searchmode`                                            | `keyword` / `hybrid` / `graph`，大小写与首尾空白不敏感                                                                                            |
+  | `maxrunes=N`                                            | 按字符数限制长度；不用内置`max`，避免中文被按字节误判                                                                                             |
+  | `notbefore=StartDate`                                   | 不早于同级指定时间字段；**跨字段校验必须用带参标签**，不要注册 struct-level validation（那需要 `common` 包导入 `internal/types`，会造成反向依赖） |
 - 错误消息：官方 zh 翻译 + 自定义标签中文文案（常量在 `constants/validations.go` 的 `VALIDATOR_*`），字段名取 `json` / `form` / `path` 标签名，**只返回第一条错误**
 - **handler 里用 `utils.HandleErrorWithCode(w, err, constants.HttpBadRequest)` 输出解析错误**，不要写成 `utils.Error(w, constants.HttpBadRequest, err.Error())`：后者会把 `*exceptions.BusinessError` 的状态码降级成硬编码的 400；`utils.HandleError` 那条分支则永远不会因校验失败而触发
 - `template/api/handler.tpl` **不再生成 `req.Validate()`**，校验完全由 `httpx.Parse` 承担
@@ -339,26 +339,49 @@ app/model/<table>        数据模型（goctl 生成 _gen.go + custom 扩展文�
 
 ## 仓库工程约束
 
-- Go / Python / TS 文件行尾统一 CRLF，仓库无 `.gitattributes`
-- `gofmt -l` 会把全仓约 88 个文件报为未格式化，**全部只是行尾符差异**：判断真实格式问题必须先剥离 `\r` 再比对；禁止直接 `gofmt -w` 全量重排（会产生整文件级噪声 diff），需要重排时用「剥离 CRLF → gofmt → 还原 CRLF」
-- 同理 `npx prettier --check` 会对**所有 TS 文件**（包括未改动的）报 `Code style issues found`：仓库没有 `.prettierrc`，prettier 默认 `endOfLine: "lf"` 而仓库是 CRLF。判断真实格式问题要先把内容转成 LF 再校验（LF 副本能通过就说明代码本身没问题），**禁止直接 `prettier --write`**，那会把文件整批转成 LF
-- `goctl`（`api format` / `api go`）会强制把行尾转成 LF，生成后需把 `.api`、`types.go`、`routes.go` 转回 CRLF；新建文件后同样要检查行尾
+- 行尾由根目录 `.gitattributes`（`* text=auto eol=lf`）统一为 LF，仓库不再按 CRLF 维护；新建文件不需要手工转换行尾
+- 格式化统一走各服务的工具（`./mix format`）：Spring Spotless、GoZero golangci-lint、NestJS Prettier、FastAPI Ruff；不要再手工执行 `gofmt -w` 或 `prettier --write` 做全量重排
+- Go 的格式问题用 `./mix lint gozero` 判断（golangci-lint 的 gofmt formatter），不要用裸 `gofmt -l`：它对行尾差异会报大量假阳性
+- `goctl`（`api format` / `api go`）生成后跑 `./mix format gozero` 收敛格式即可，不需要再手工处理行尾
 - **goctl 版本不一致（待收口）**：仓库已生成的 34 个文件头部标记 `goctl 1.9.2`，本机安装的却是 1.10.2，重新生成会把版本注释刷成 1.10.2（`types.go`、`routes.go` 一并刷新）。提交前把这两处注释改回 1.9.2 以减少噪声；彻底解决要么装 1.9.2，要么统一升到 1.10.2 并接受一次全量注释刷新
 - git 用于精确核对与回退：`git status --porcelain`、`git diff --ignore-cr-at-eol`（判断是否仅行尾差异）、`git checkout -- <文件>`
 - 本机环境参考：Go / gofmt 在 `C:\Program Files\Go\bin\`，goctl 在 `C:\Users\30708\go\bin\goctl.EXE`，git 在 `C:\Program Files\Git\cmd\git.EXE`（`usr\bin\` 下有 grep / tr / sed / basename 等，用完整路径调用），maven 在 `C:\apache-maven-3.9.11\bin\mvn.CMD`，javap 在 `C:\Program Files\Java\jdk-17\bin\javap.exe`
-- bash 环境的 `dirname` / `head` 等不稳定（PATH 时有时无），批量格式与行尾校验优先用 Python `subprocess` 调绝对路径
-
-- `mix` 脚本顶层子命令只有 `setup`、`swag`、`goctl-api`、`goctl-orm`、`dev`、`dist`、`docker`、`docker-services`、`loki`、`compose`、`help`；开发模式必须写全 `./mix dev multi|seq|stop`（**没有** `./mix seq` / `./mix multi` / `./mix stop`，README 历史版本里这三处写错）
+- bash 环境的 `dirname` / `head` 等不稳定（PATH 时有时无），批量格式与行尾校验优先走 `./mix format` / `./mix lint`，需要脚本兜底时用 Python `subprocess` 调绝对路径
+- `mix` 脚本顶层子命令有 `setup`、`swag`、`goctl-api`、`goctl-orm`、`lint`、`format`、`dev`、`dist`、`docker`、`docker-services`、`loki`、`compose`、`help`；开发模式必须写全 `./mix dev multi|seq|stop`（**没有** `./mix seq` / `./mix multi` / `./mix stop`，README 历史版本里这三处写错）
 - `scripts/run.sh` 的运行工具默认值：`--java-build` 默认 `maven`、`--node-runtime` 默认 `bun`、`--python-runtime` 默认 `uv`
 - 两套容器编排的容器名不同：`./mix docker` 用 `mix-<service>-container`，`./mix compose` 用 `mix-<service>`（compose 的 `container_name`）
-- `README.md` 同样是 CRLF，批量改文档要按「归一化 LF → 断言唯一性后替换 → 还原 CRLF」处理，不要逐处手工编辑
+- `README.md` 行尾由 `.gitattributes` 统一为 LF，批量改文档按「归一化 LF → 断言唯一性后替换」处理，不要逐处手工编辑
 
 ## 验证命令
 
-| 服务    | 验证                                                                                                                               |
-| ------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| spring  | `mvn compile -f spring/pom.xml`（打包 `mvn clean package -DskipTests`）                                                            |
-| nestjs  | `npm run node:build`（nestjs 目录）                                                                                                |
-| fastapi | `.venv/Scripts/python.exe -c "import app"` 级导入校验 + pytest                                                                     |
-| gozero  | `cd gozero/app && GOTOOLCHAIN=local go build ./... && go vet ./... && go test ./... -count=1`；格式用「剥离 CRLF 后 gofmt -l」复核 |
-| gateway | `apisix.yaml` 改动后校验 YAML 语法与目标路由的插件挂载（配置驱动，无业务代码）                                                     |
+| 服务    | 验证                                                                                                                                |
+| ------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| spring  | `mvn compile -f spring/pom.xml`（打包 `mvn clean package -DskipTests`）                                                             |
+| nestjs  | `npm run node:build`（nestjs 目录）                                                                                                 |
+| fastapi | `.venv/Scripts/python.exe -c "import app"` 级导入校验 + pytest                                                                      |
+| gozero  | `cd gozero/app && GOTOOLCHAIN=local go build ./... && go vet ./... && go test ./... -count=1`；格式与静态检查走 `./mix lint gozero` |
+| gateway | `apisix.yaml` 改动后校验 YAML 语法与目标路由的插件挂载（配置驱动，无业务代码）                                                      |
+
+### 代码风格检查与格式化
+
+生成或修改代码后，先格式化再检查，两者都通过才算完成。省略服务名时处理 spring、gozero、nestjs、fastapi 全部：
+
+```bash
+# Spring：Eclipse formatter + import 四段分组，配置在 spring/eclipse-formatter.xml
+./mix format spring      # mvn spotless:apply
+./mix lint spring        # mvn spotless:check
+
+# GoZero：配置在 gozero/app/.golangci.yml
+./mix format gozero      # golangci-lint fmt
+./mix lint gozero        # golangci-lint run
+
+# NestJS：配置在 nestjs/.prettierrc 与 nestjs/eslint.config.mjs
+./mix format nestjs      # npm run format + npm run lint:fix
+./mix lint nestjs        # npm run lint + npm run format:check
+
+# FastAPI：配置在 fastapi/pyproject.toml
+./mix format fastapi     # ruff format . + ruff check --fix .
+./mix lint fastapi       # ruff check .
+```
+
+底层脚本是 `scripts/format.sh` 与 `scripts/lint.sh`，对应工具未安装时该服务会自动跳过并提示；`gateway` 为 APISIX 配置，不参与。行尾由根目录 `.gitattributes` 统一为 LF。
